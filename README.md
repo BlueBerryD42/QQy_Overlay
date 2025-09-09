@@ -7,20 +7,14 @@
 
   ## Features
 
-     Comic Organization*: Select and scan your local comic directory to
-  automatically organize your collection.
-     Multiple Viewing Modes*: View your comic collection in a grid, list,
-  or other layouts.
-     Comic Viewer*: A feature-rich comic viewer with fullscreen mode and
-  easy navigation.
-     Translation Support*: Add, edit, and view translations for your comic
-  pages.
+     Comic Organization*: Select and scan your local comic directory to automatically organize your collection.
+     Multiple Viewing Modes*: View your comic collection in a grid, list, or other layouts.
+     Comic Viewer*: A feature-rich comic viewer with fullscreen mode and easy navigation.
+     Translation Support*: Add, edit, and view translations for your comic pages.
       *   Create and resize translation boxes directly on the comic page.
       *   Use the integrated DeepL API to automatically translate text.
-     Sorting and Filtering*: Sort your comics and pages by name, date, or
-  number of translations.
-     File Explorer Integration*: Quickly open the comic's folder from
-  within the application (Windows only).
+     Sorting and Filtering*: Sort your comics and pages by name, date, or number of translations.
+     File Explorer Integration*: Quickly open the comic's folder from within the application (Windows only).
 
   ## Getting Started
 
