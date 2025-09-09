@@ -82,192 +82,198 @@ class _GalleryScreenState extends State<GalleryScreen> {
   Widget build(BuildContext context) {
     final sortedImages = _getSortedImages();
     
-    return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(widget.comic.name),
-            Text(
-              '${widget.comic.images.length} pages',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Colors.grey[600],
+    return Hero(
+      tag: 'comic-${widget.comic.images.first.path}',
+      child: Scaffold(
+        appBar: AppBar(
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.comic.name),
+              Text(
+                '${widget.comic.images.length} pages',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.grey[600],
+                ),
               ),
+            ],
+          ),
+          actions: [
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.sort),
+              tooltip: 'Sort by',
+              onSelected: (value) {
+                setState(() {
+                  _sortBy = value;
+                });
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'name',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.sort_by_alpha,
+                        color: _sortBy == 'name' ? Theme.of(context).primaryColor : null,
+                      ),
+                      const SizedBox(width: 8),
+                      const Text('Name'),
+                      if (_sortBy == 'name') ...[
+                        const Spacer(),
+                        Icon(Icons.check, color: Theme.of(context).primaryColor),
+                      ],
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'date',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.access_time,
+                        color: _sortBy == 'date' ? Theme.of(context).primaryColor : null,
+                      ),
+                      const SizedBox(width: 8),
+                      const Text('Modified Date'),
+                      if (_sortBy == 'date') ...[
+                        const Spacer(),
+                        Icon(Icons.check, color: Theme.of(context).primaryColor),
+                      ],
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'translations',
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.translate,
+                        color: _sortBy == 'translations' ? Theme.of(context).primaryColor : null,
+                      ),
+                      const SizedBox(width: 8),
+                      const Text('Translations'),
+                      if (_sortBy == 'translations') ...[
+                        const Spacer(),
+                        Icon(Icons.check, color: Theme.of(context).primaryColor),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            IconButton(
+              icon: Icon(_showDetails ? Icons.view_module : Icons.view_list),
+              onPressed: () {
+                setState(() {
+                  _showDetails = !_showDetails;
+                });
+              },
+              tooltip: _showDetails ? 'Hide details' : 'Show details',
+            ),
+            PopupMenuButton<int>(
+              icon: const Icon(Icons.grid_view),
+              tooltip: 'Grid size',
+              onSelected: (value) {
+                setState(() {
+                  _crossAxisCount = value;
+                });
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 2,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.view_module),
+                      const SizedBox(width: 8),
+                      const Text('Large (2 columns)'),
+                      if (_crossAxisCount == 2) ...[
+                        const Spacer(),
+                        Icon(Icons.check, color: Theme.of(context).primaryColor),
+                      ],
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 3,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.grid_view),
+                      const SizedBox(width: 8),
+                      const Text('Medium (3 columns)'),
+                      if (_crossAxisCount == 3) ...[
+                        const Spacer(),
+                        Icon(Icons.check, color: Theme.of(context).primaryColor),
+                      ],
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 4,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.apps),
+                      const SizedBox(width: 8),
+                      const Text('Small (4 columns)'),
+                      if (_crossAxisCount == 4) ...[
+                        const Spacer(),
+                        Icon(Icons.check, color: Theme.of(context).primaryColor),
+                      ],
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 5,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.view_comfy),
+                      const SizedBox(width: 8),
+                      const Text('Compact (5 columns)'),
+                      if (_crossAxisCount == 5) ...[
+                        const Spacer(),
+                        Icon(Icons.check, color: Theme.of(context).primaryColor),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
             ),
           ],
         ),
-        actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.sort),
-            tooltip: 'Sort by',
-            onSelected: (value) {
-              setState(() {
-                _sortBy = value;
-              });
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'name',
-                child: Row(
+        body: _isLoading
+            ? const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
-                      Icons.sort_by_alpha,
-                      color: _sortBy == 'name' ? Theme.of(context).primaryColor : null,
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('Name'),
-                    if (_sortBy == 'name') ...[
-                      const Spacer(),
-                      Icon(Icons.check, color: Theme.of(context).primaryColor),
-                    ],
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Loading translation data...'),
                   ],
                 ),
-              ),
-              PopupMenuItem(
-                value: 'date',
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.access_time,
-                      color: _sortBy == 'date' ? Theme.of(context).primaryColor : null,
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('Modified Date'),
-                    if (_sortBy == 'date') ...[
-                      const Spacer(),
-                      Icon(Icons.check, color: Theme.of(context).primaryColor),
-                    ],
-                  ],
+              )
+            : RefreshIndicator(
+                onRefresh: _loadTranslationCounts,
+                child: GridView.builder(
+                  padding: const EdgeInsets.all(12.0),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: _crossAxisCount,
+                    crossAxisSpacing: 8.0,
+                    mainAxisSpacing: 8.0,
+                    childAspectRatio: _showDetails ? 0.75 : 1.0,
+                  ),
+                  itemCount: sortedImages.length,
+                  itemBuilder: (context, index) {
+                    final imageFile = sortedImages[index];
+                    final translationCount = _translationCounts[imageFile.path] ?? 0;
+
+                    return KeyedSubtree(
+                      key: ValueKey(imageFile.path),
+                      child: _buildImageCard(imageFile, translationCount, index + 1),
+                    );
+                  },
                 ),
               ),
-              PopupMenuItem(
-                value: 'translations',
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.translate,
-                      color: _sortBy == 'translations' ? Theme.of(context).primaryColor : null,
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('Translations'),
-                    if (_sortBy == 'translations') ...[
-                      const Spacer(),
-                      Icon(Icons.check, color: Theme.of(context).primaryColor),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-          IconButton(
-            icon: Icon(_showDetails ? Icons.view_module : Icons.view_list),
-            onPressed: () {
-              setState(() {
-                _showDetails = !_showDetails;
-              });
-            },
-            tooltip: _showDetails ? 'Hide details' : 'Show details',
-          ),
-          PopupMenuButton<int>(
-            icon: const Icon(Icons.grid_view),
-            tooltip: 'Grid size',
-            onSelected: (value) {
-              setState(() {
-                _crossAxisCount = value;
-              });
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 2,
-                child: Row(
-                  children: [
-                    const Icon(Icons.view_module),
-                    const SizedBox(width: 8),
-                    const Text('Large (2 columns)'),
-                    if (_crossAxisCount == 2) ...[
-                      const Spacer(),
-                      Icon(Icons.check, color: Theme.of(context).primaryColor),
-                    ],
-                  ],
-                ),
-              ),
-              PopupMenuItem(
-                value: 3,
-                child: Row(
-                  children: [
-                    const Icon(Icons.grid_view),
-                    const SizedBox(width: 8),
-                    const Text('Medium (3 columns)'),
-                    if (_crossAxisCount == 3) ...[
-                      const Spacer(),
-                      Icon(Icons.check, color: Theme.of(context).primaryColor),
-                    ],
-                  ],
-                ),
-              ),
-              PopupMenuItem(
-                value: 4,
-                child: Row(
-                  children: [
-                    const Icon(Icons.apps),
-                    const SizedBox(width: 8),
-                    const Text('Small (4 columns)'),
-                    if (_crossAxisCount == 4) ...[
-                      const Spacer(),
-                      Icon(Icons.check, color: Theme.of(context).primaryColor),
-                    ],
-                  ],
-                ),
-              ),
-              PopupMenuItem(
-                value: 5,
-                child: Row(
-                  children: [
-                    const Icon(Icons.view_comfy),
-                    const SizedBox(width: 8),
-                    const Text('Compact (5 columns)'),
-                    if (_crossAxisCount == 5) ...[
-                      const Spacer(),
-                      Icon(Icons.check, color: Theme.of(context).primaryColor),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
+        bottomNavigationBar: _buildStatsBar(),
       ),
-      body: _isLoading
-          ? const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Loading translation data...'),
-                ],
-              ),
-            )
-          : RefreshIndicator(
-              onRefresh: _loadTranslationCounts,
-              child: GridView.builder(
-                padding: const EdgeInsets.all(12.0),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: _crossAxisCount,
-                  crossAxisSpacing: 8.0,
-                  mainAxisSpacing: 8.0,
-                  childAspectRatio: _showDetails ? 0.75 : 1.0,
-                ),
-                itemCount: sortedImages.length,
-                itemBuilder: (context, index) {
-                  final imageFile = sortedImages[index];
-                  final translationCount = _translationCounts[imageFile.path] ?? 0;
-                  
-                  return _buildImageCard(imageFile, translationCount, index + 1);
-                },
-              ),
-            ),
-      bottomNavigationBar: _buildStatsBar(),
     );
   }
 
@@ -575,11 +581,17 @@ Widget _buildTranslationBadge(int translationCount) {
   }
 
   void _openViewer(BuildContext context, File imageFile) {
+    final sortedImages = _getSortedImages();
+    final initialIndex = sortedImages.indexOf(imageFile);
+    
     Navigator.push(
       context,
       PageRouteBuilder(
         pageBuilder: (context, animation, secondaryAnimation) => 
-            ViewerScreen(imageFile: imageFile),
+            ViewerScreen(
+              imageFiles: sortedImages, 
+              initialIndex: initialIndex >= 0 ? initialIndex : 0
+            ),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(
             opacity: animation,

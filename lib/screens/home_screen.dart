@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -19,6 +21,7 @@ class _HomeScreenState extends State<HomeScreen> {
   GalleryDisplayMode _displayMode = GalleryDisplayMode.grid;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  Set<String> _expandedFolders = {};
 
   @override
   void initState() {
@@ -57,6 +60,13 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         },
       ),
+      floatingActionButton: _comicsPath != null
+          ? FloatingActionButton(
+              onPressed: () => _openRootFolder(context, _comicsPath),
+              tooltip: 'Open root folder',
+              child: const Icon(Icons.folder),
+            )
+          : null,
     );
   }
 
@@ -88,6 +98,11 @@ class _HomeScreenState extends State<HomeScreen> {
           icon: const Icon(Icons.refresh),
           onPressed: _loadComics,
           tooltip: 'Refresh gallery',
+        ),
+        IconButton(
+          icon: const Icon(Icons.folder),
+          onPressed: () => _openRootFolder(context, _comicsPath),
+          tooltip: 'Open root folder',
         ),
       ],
       bottom: _buildSearchBar(),
@@ -180,13 +195,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildEmptyState() {
-    return const Center(
+    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.folder_open, size: 64, color: Colors.grey),
-          SizedBox(height: 16),
-          Text('Please select your comics directory.'),
+          const Icon(Icons.folder_open, size: 64, color: Colors.grey),
+          const SizedBox(height: 16),
+          const Text(
+            'Please select your comics directory.',
+            style: TextStyle(fontSize: 16),
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton.icon(
+            onPressed: _selectComicsDirectory,
+            icon: const Icon(Icons.folder_open),
+            label: const Text('Select Comics Folder'),
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
+          ),
         ],
       ),
     );
@@ -310,39 +337,68 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildGalleryContent(ComicProvider comicProvider) {
-    final filteredComics = comicProvider.comics
-        .where((comic) => comic.name.toLowerCase().contains(_searchQuery))
-        .toList();
-
-    if (filteredComics.isEmpty && _searchQuery.isNotEmpty) {
-      return _buildNoResultsFound();
-    }
-
     final currentFolder = comicProvider.rootFolder != null
         ? _findFolderByPath(comicProvider.currentPath, comicProvider.rootFolder!)
         : null;
 
     final subfolders = currentFolder?.subfolders ?? [];
+    final hasCurrentFolderImages = currentFolder?.hasImages ?? false;
 
-    if (subfolders.isEmpty && filteredComics.isEmpty) {
+    // Filter content based on search query
+    final filteredSubfolders = _searchQuery.isEmpty 
+        ? subfolders 
+        : subfolders.where((folder) => 
+            folder.name.toLowerCase().contains(_searchQuery) ||
+            _searchInFolder(folder, _searchQuery)).toList();
+
+    final filteredComics = comicProvider.comics
+        .where((comic) => comic.name.toLowerCase().contains(_searchQuery))
+        .toList();
+
+    final filteredCurrentFolderImages = hasCurrentFolderImages && 
+        (_searchQuery.isEmpty || currentFolder!.name.toLowerCase().contains(_searchQuery))
+        ? currentFolder!.images
+        : <File>[];
+
+    if (filteredSubfolders.isEmpty && filteredComics.isEmpty && filteredCurrentFolderImages.isEmpty && _searchQuery.isNotEmpty) {
+      return _buildNoResultsFound();
+    }
+
+    if (subfolders.isEmpty && filteredComics.isEmpty && !hasCurrentFolderImages) {
       return _buildNoGalleriesFound();
     }
 
     return CustomScrollView(
       slivers: [
-        if (subfolders.isNotEmpty) ...[
-          _buildSectionHeader(
-            icon: Icons.folder,
-            title: 'Folders',
-            color: Colors.orange[600]!,
-          ),
-          _buildSubfolderGrid(subfolders, comicProvider),
-        ],
-        if (filteredComics.isNotEmpty) ...[
+        // Show current folder's images if it has any
+        if (filteredCurrentFolderImages.isNotEmpty) ...[
           _buildSectionHeader(
             icon: Icons.photo_library,
-            title: 'Galleries',
+            title: 'Current Folder Images',
+            color: Colors.green[600]!,
+            subtitle: '${filteredCurrentFolderImages.length} images',
+          ),
+          _buildCurrentFolderImagesFiltered(filteredCurrentFolderImages, currentFolder!),
+        ],
+        
+        // Show subfolders
+        if (filteredSubfolders.isNotEmpty) ...[
+          _buildSectionHeader(
+            icon: Icons.folder,
+            title: 'Subfolders',
+            color: Colors.orange[600]!,
+            subtitle: '${filteredSubfolders.length} folders',
+          ),
+          _buildSubfolderGrid(filteredSubfolders, comicProvider),
+        ],
+        
+        // Show galleries from subfolders
+        if (filteredComics.isNotEmpty) ...[
+          _buildSectionHeader(
+            icon: Icons.collections,
+            title: 'Galleries from Subfolders',
             color: Colors.blue[600]!,
+            subtitle: '${filteredComics.length} galleries',
           ),
           _buildGalleryView(filteredComics, comicProvider),
         ],
@@ -380,6 +436,7 @@ class _HomeScreenState extends State<HomeScreen> {
     required IconData icon,
     required String title,
     required Color color,
+    String? subtitle,
   }) {
     return SliverToBoxAdapter(
       child: Padding(
@@ -388,12 +445,29 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Icon(icon, color: color),
             const SizedBox(width: 8),
-            Text(
-              title,
-              style: Theme.of(context)
-                  .textTheme
-                  .titleLarge
-                  ?.copyWith(fontWeight: FontWeight.bold),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleLarge
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: Colors.grey[600]),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ],
         ),
@@ -401,7 +475,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-Widget _buildSubfolderGrid(
+  Widget _buildSubfolderGrid(
   List<FolderNode> subfolders,
   ComicProvider comicProvider,
 ) {
@@ -409,43 +483,317 @@ Widget _buildSubfolderGrid(
     delegate: SliverChildBuilderDelegate(
       (context, index) {
         final subfolder = subfolders[index];
-        return InkWell(
-          onTap: () => comicProvider.navigateToFolder(subfolder.fullPath),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.folder_outlined,
-                  size: 20,
-                  color: Colors.orange[700],
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    subfolder.name,
-                    style: Theme.of(context).textTheme.bodyMedium,
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                  ),
-                ),
-                if (subfolder.hasImages)
-                  Text(
-                    '${subfolder.images.length}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey[600],
-                        ),
-                  ),
-              ],
-            ),
-          ),
-        );
+        return _buildFileExplorerItem(subfolder, comicProvider, 0);
       },
       childCount: subfolders.length,
     ),
   );
 }
 
+Widget _buildFileExplorerItem(FolderNode folder, ComicProvider comicProvider, int level) {
+  final theme = Theme.of(context);
+  final hasImages = folder.hasImages;
+  final hasSubfolders = folder.hasSubfolders;
+  final isExpanded = _expandedFolders.contains(folder.fullPath);
+  final totalImages = _countTotalImages(folder);
+  final totalSubfolders = _countTotalSubfolders(folder);
+  
+  return Column(
+    children: [
+      // Main folder item
+      InkWell(
+        onTap: () {
+          if (hasSubfolders) {
+            setState(() {
+              if (isExpanded) {
+                _expandedFolders.remove(folder.fullPath);
+              } else {
+                _expandedFolders.add(folder.fullPath);
+              }
+            });
+          } else {
+            comicProvider.navigateToFolder(folder.fullPath);
+          }
+        },
+        child: Container(
+          padding: EdgeInsets.only(
+            left: 16 + (level * 20),
+            right: 16,
+            top: 8,
+            bottom: 8,
+          ),
+          child: Row(
+            children: [
+              // Expand/collapse button
+              SizedBox(
+                width: 20,
+                child: hasSubfolders
+                    ? Icon(
+                        isExpanded ? Icons.expand_more : Icons.chevron_right,
+                        size: 16,
+                        color: Colors.grey[600],
+                      )
+                    : const SizedBox(width: 16),
+              ),
+              
+              // Folder icon
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: _getFolderColor(hasImages, hasSubfolders).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Icon(
+                  _getFolderIcon(hasImages, hasSubfolders),
+                  size: 18,
+                  color: _getFolderColor(hasImages, hasSubfolders),
+                ),
+              ),
+              const SizedBox(width: 12),
+              
+              // Folder name and info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      folder.name,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        if (hasImages) ...[
+                          Icon(Icons.image, size: 12, color: Colors.grey[500]),
+                          const SizedBox(width: 2),
+                          Text(
+                            '$totalImages',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: Colors.grey[500],
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                        if (hasImages && hasSubfolders) const SizedBox(width: 8),
+                        if (hasSubfolders) ...[
+                          Icon(Icons.folder, size: 12, color: Colors.grey[500]),
+                          const SizedBox(width: 2),
+                          Text(
+                            '$totalSubfolders',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: Colors.grey[500],
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              
+              // Image preview
+              if (hasImages && folder.images.isNotEmpty)
+                Container(
+                  width: 40,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: theme.dividerColor.withOpacity(0.3),
+                      width: 0.5,
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: Image.file(
+                      folder.images.first,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) {
+                        return Container(
+                          color: Colors.grey[100],
+                          child: Icon(
+                            Icons.image,
+                            size: 12,
+                            color: Colors.grey[400],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              
+              // Navigation arrow
+              if (!hasSubfolders) ...[
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.arrow_forward_ios,
+                  size: 12,
+                  color: Colors.grey[400],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      
+      // Subfolders (if expanded)
+      if (isExpanded && hasSubfolders)
+        ...folder.subfolders.map((subfolder) => 
+          _buildFileExplorerItem(subfolder, comicProvider, level + 1)
+        ).toList(),
+    ],
+  );
+}
+
+IconData _getFolderIcon(bool hasImages, bool hasSubfolders) {
+  if (hasImages && hasSubfolders) {
+    return Icons.folder_shared;
+  } else if (hasImages) {
+    return Icons.folder;
+  } else if (hasSubfolders) {
+    return Icons.folder_outlined;
+  } else {
+    return Icons.folder_open;
+  }
+}
+
+Color _getFolderColor(bool hasImages, bool hasSubfolders) {
+  if (hasImages && hasSubfolders) {
+    return Colors.orange;
+  } else if (hasImages) {
+    return Colors.blue;
+  } else if (hasSubfolders) {
+    return Colors.green;
+  } else {
+    return Colors.grey;
+  }
+}
+
+int _countTotalImages(FolderNode folder) {
+  int count = folder.images.length;
+  for (final subfolder in folder.subfolders) {
+    count += _countTotalImages(subfolder);
+  }
+  return count;
+}
+
+int _countTotalSubfolders(FolderNode folder) {
+  int count = folder.subfolders.length;
+  for (final subfolder in folder.subfolders) {
+    count += _countTotalSubfolders(subfolder);
+  }
+  return count;
+}
+
+Widget _buildCurrentFolderImages(FolderNode folder, ComicProvider comicProvider) {
+  return SliverPadding(
+    padding: const EdgeInsets.all(8.0),
+    sliver: SliverGrid(
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        childAspectRatio: 0.8,
+        crossAxisSpacing: 6.0,
+        mainAxisSpacing: 6.0,
+      ),
+      delegate: SliverChildBuilderDelegate(
+        (context, index) {
+          final image = folder.images[index];
+          return InkWell(
+            onTap: () {
+              // Create a temporary comic for the current folder images
+              final tempComic = Comic(
+                name: folder.name,
+                images: folder.images,
+              );
+              _openGallery(tempComic);
+            },
+            borderRadius: BorderRadius.circular(8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.file(
+                image,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    color: Colors.grey[300],
+                    child: const Icon(Icons.broken_image, color: Colors.grey),
+                  );
+                },
+              ),
+            ),
+          );
+        },
+        childCount: folder.images.length,
+      ),
+    ),
+  );
+}
+
+Widget _buildCurrentFolderImagesFiltered(List<File> images, FolderNode folder) {
+  return SliverPadding(
+    padding: const EdgeInsets.all(8.0),
+    sliver: SliverGrid(
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        childAspectRatio: 0.8,
+        crossAxisSpacing: 6.0,
+        mainAxisSpacing: 6.0,
+      ),
+      delegate: SliverChildBuilderDelegate(
+        (context, index) {
+          final image = images[index];
+          return InkWell(
+            onTap: () {
+              // Create a temporary comic for the current folder images
+              final tempComic = Comic(
+                name: folder.name,
+                images: folder.images,
+              );
+              _openGallery(tempComic);
+            },
+            borderRadius: BorderRadius.circular(8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.file(
+                image,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    color: Colors.grey[300],
+                    child: const Icon(Icons.broken_image, color: Colors.grey),
+                  );
+                },
+              ),
+            ),
+          );
+        },
+        childCount: images.length,
+      ),
+    ),
+  );
+}
+
+bool _searchInFolder(FolderNode folder, String query) {
+  // Check if folder name matches
+  if (folder.name.toLowerCase().contains(query)) {
+    return true;
+  }
+  
+  // Check if any subfolder matches
+  for (final subfolder in folder.subfolders) {
+    if (_searchInFolder(subfolder, query)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
 
   Widget _buildGalleryView(List<Comic> comics, ComicProvider comicProvider) {
     switch (_displayMode) {
@@ -657,7 +1005,7 @@ Widget _buildSubfolderGrid(
           children: [
             Expanded(
               child: Hero(
-                tag: 'comic-${comic.name}',
+                tag: 'comic-${comic.images.first.path}',
                 child: Image.file(
                   comic.images.first,
                   fit: BoxFit.cover,
@@ -725,6 +1073,7 @@ Widget _buildSubfolderGrid(
     final comicsPath = prefs.getString('comics_path');
     setState(() {
       _comicsPath = comicsPath;
+      _expandedFolders.clear(); // Clear expanded state when loading new comics
     });
 
     if (comicsPath != null) {
@@ -776,6 +1125,10 @@ Widget _buildSubfolderGrid(
     final currentPath = comicProvider.currentPath;
     final parentPath = currentPath.split('/').sublist(0, currentPath.split('/').length - 1).join('/');
     
+    setState(() {
+      _expandedFolders.clear(); // Clear expanded state when navigating
+    });
+    
     if (parentPath.isNotEmpty && parentPath != currentPath) {
       comicProvider.navigateToFolder(parentPath);
     } else if (_comicsPath != null) {
@@ -783,4 +1136,24 @@ Widget _buildSubfolderGrid(
       comicProvider.navigateToFolder(_comicsPath!);
     }
   }
+
+  void _openRootFolder(BuildContext context, String? comicsPath) {
+  if (comicsPath == null || comicsPath.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('No folder path provided.')),
+    );
+    return;
+  }
+
+  if (Platform.isWindows) {
+    // Open folder with File Explorer
+    Process.start('explorer.exe', [comicsPath]);
+  } else {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Open root folder is only supported on Windows.'),
+      ),
+    );
+  }
+}
 }
