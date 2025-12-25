@@ -1,0 +1,12 @@
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\bin\Debug\net8.0\QRganize.Core.deps.json
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\bin\Debug\net8.0\QRganize.Core.dll
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\bin\Debug\net8.0\QRganize.Core.pdb
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\obj\Debug\net8.0\QRganize.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\obj\Debug\net8.0\QRganize.Core.AssemblyInfoInputs.cache
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\obj\Debug\net8.0\QRganize.Core.AssemblyInfo.cs
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\obj\Debug\net8.0\QRganize.Core.csproj.CoreCompileInputs.cache
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\obj\Debug\net8.0\QRganize.Core.sourcelink.json
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\obj\Debug\net8.0\QRganize.Core.dll
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\obj\Debug\net8.0\refint\QRganize.Core.dll
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\obj\Debug\net8.0\QRganize.Core.pdb
+C:\Users\ASUS\OneDrive\Desktop\QQy_Overlay\backend\QRganize.Core\obj\Debug\net8.0\ref\QRganize.Core.dll

@@ -1,0 +1,62 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QRganize.API", "QRganize.API\QRganize.API.csproj", "{F5D0F253-E931-4D00-9628-83A6115E1FDB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QRganize.Core", "QRganize.Core\QRganize.Core.csproj", "{8D927D1F-31EE-465C-8B70-072650B8A59E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QRganize.Infrastructure", "QRganize.Infrastructure\QRganize.Infrastructure.csproj", "{3C16564F-CC89-4466-A0DF-41397026E840}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|Any CPU = Release|Any CPU
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Debug|x64.Build.0 = Debug|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Debug|x86.Build.0 = Debug|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Release|x64.ActiveCfg = Release|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Release|x64.Build.0 = Release|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Release|x86.ActiveCfg = Release|Any CPU
+		{F5D0F253-E931-4D00-9628-83A6115E1FDB}.Release|x86.Build.0 = Release|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Debug|x64.Build.0 = Debug|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Debug|x86.Build.0 = Debug|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Release|x64.ActiveCfg = Release|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Release|x64.Build.0 = Release|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Release|x86.ActiveCfg = Release|Any CPU
+		{8D927D1F-31EE-465C-8B70-072650B8A59E}.Release|x86.Build.0 = Release|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Debug|x64.Build.0 = Debug|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Debug|x86.Build.0 = Debug|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Release|x64.ActiveCfg = Release|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Release|x64.Build.0 = Release|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Release|x86.ActiveCfg = Release|Any CPU
+		{3C16564F-CC89-4466-A0DF-41397026E840}.Release|x86.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

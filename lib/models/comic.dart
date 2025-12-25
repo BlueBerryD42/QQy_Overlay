@@ -1,11 +1,19 @@
 
 import 'dart:io';
+import '../models/db/comic_model.dart';
 
 class Comic {
   final String name;
   final List<File> images;
+  final int? comicId;
+  final ComicModel? comicModel;
 
-  Comic({required this.name, required this.images});
+  Comic({
+    required this.name,
+    required this.images,
+    this.comicId,
+    this.comicModel,
+  });
 }
 
 class FolderNode {

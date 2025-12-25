@@ -5,19 +5,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as path;
 import 'package:http/http.dart' as http;
-import 'package:qrganize/services/settings_service.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import '../services/settings_service.dart';
 
 import '../models/translation.dart';
+import '../models/db/page_model.dart';
+import '../models/db/overlay_box_model.dart';
+import '../services/database_service.dart';
+import '../repositories/page_repository.dart';
+import '../repositories/overlay_box_repository.dart';
 import '../widgets/rectangle_painter.dart';
 
 class ViewerScreen extends StatefulWidget {
   final List<File> imageFiles;
   final int initialIndex;
+  final List<PageModel>? pages; // Optional: if provided, use for database operations
 
   const ViewerScreen({
     super.key, 
     required this.imageFiles,
     this.initialIndex = 0,
+    this.pages,
   });
 
   @override
@@ -25,6 +33,10 @@ class ViewerScreen extends StatefulWidget {
 }
 
 class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMixin {
+  // Static variable to track if WebView has been loaded globally (persists across screen instances)
+  static bool _globalWebViewLoaded = false;
+  static InAppWebViewController? _globalWebViewController;
+  
   late int _currentImageIndex;
   late File _currentImageFile;
   final List<Translation> _translations = [];
@@ -53,6 +65,23 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
   bool _isFullscreen = false;
   bool _showOverlays = true;
   
+  // Draggable dock position (for controls dock - separate from Grok)
+  Offset _dockPosition = const Offset(16, 16); // Controls dock position
+  bool _isDraggingDock = false;
+  
+  // Combined Grok container position (menu + WebView)
+  Offset _grokContainerPosition = const Offset(16, 16); // Can be dragged anywhere
+  bool _isDraggingGrok = false;
+  bool _showWebView = false;
+  Size _webViewSize = const Size(400, 600); // Default mobile-like size
+  bool _isResizingWebView = false;
+  Offset? _resizeStartPosition;
+  Size? _resizeStartSize;
+  InAppWebViewController? _grokWebViewController;
+  bool _isReloadingWebView = false; // Flag to prevent infinite reload loop
+  bool _isHoveringTopBar = false; // Track hover state for top bar
+  bool _hasWebViewLoaded = false; // Track if WebView has been loaded at least once (instance-level)
+  
   // Context menu related
   Offset? _contextMenuPosition;
   int? _contextMenuBoxIndex;
@@ -65,6 +94,12 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
 
   // Focus node for keyboard navigation
   final FocusNode _focusNode = FocusNode();
+
+  // Database services
+  final DatabaseService _dbService = DatabaseService();
+  PageRepository? _pageRepository;
+  OverlayBoxRepository? _overlayBoxRepository;
+  int? _currentPageId;
 
   @override
   void initState() {
@@ -92,8 +127,51 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
     _fadeController.forward();
     _slideController.forward();
     
-    _loadImageSize();
-    _loadTranslations();
+    _initializeDatabase().then((_) {
+      _loadImageSize();
+      _loadTranslations();
+    });
+  }
+
+  Future<void> _initializeDatabase() async {
+    await _dbService.initializeDatabase();
+    _pageRepository = PageRepository(_dbService);
+    _overlayBoxRepository = OverlayBoxRepository(_dbService);
+    
+    // Find current page ID if pages are provided
+    if (widget.pages != null && widget.pages!.isNotEmpty) {
+      // Match by index first (most reliable when pages are in order)
+      if (_currentImageIndex < widget.pages!.length) {
+        _currentPageId = widget.pages![_currentImageIndex].pageId;
+        debugPrint('ViewerScreen: Set pageId to ${_currentPageId} from pages[${_currentImageIndex}]');
+      } else {
+        // Fallback: try to match by file path
+        final currentPage = widget.pages!.firstWhere(
+          (p) => p.storagePath == _currentImageFile.path,
+          orElse: () => widget.pages![0],
+        );
+        _currentPageId = currentPage.pageId;
+        debugPrint('ViewerScreen: Set pageId to ${_currentPageId} from path match (fallback)');
+      }
+    } else {
+      debugPrint('ViewerScreen: No pages provided, trying to find by path');
+      // Try to find page by file path
+      _currentPageId = await _findPageIdByPath(_currentImageFile.path);
+      debugPrint('ViewerScreen: Found pageId by path: $_currentPageId');
+    }
+  }
+
+  Future<int?> _findPageIdByPath(String filePath) async {
+    if (_pageRepository == null) return null;
+    
+    try {
+      // This is a simplified lookup - in production you might want to cache this
+      // For now, we'll search by matching the path
+      // Note: This is not efficient for large databases, but works for the migration
+      return null; // Will fall back to JSON if not found
+    } catch (e) {
+      return null;
+    }
   }
 
 
@@ -104,6 +182,7 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
     _focusNode.dispose();
     _removeContextMenu();
     _removeTooltip();
+    _dbService.dispose();
     super.dispose();
   }
 
@@ -120,8 +199,11 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
             // Main image viewer
             _buildImageViewer(),
             
-            // Top controls bar
-            _buildTopBar(),
+            // Combined controls dock and Grok WebView (unified UI)
+            _buildGrokWebView(
+              MediaQuery.of(context).size.width,
+              MediaQuery.of(context).size.height,
+            ),
             
             // Bottom carousel (appears on mouse hover)
             _buildBottomCarousel(),
@@ -215,109 +297,167 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
     );
   }
 
-  Widget _buildTopBar() {
+  Widget _buildDraggableDock() {
     if (_isFullscreen) {
       return const SizedBox.shrink();
     }
     
-    return AnimatedBuilder(
-      animation: _slideAnimation,
-      builder: (context, child) {
-        return SlideTransition(
-          position: _slideAnimation,
-          child: AnimatedOpacity(
-            opacity: _showControls ? 1.0 : 0.0,
-            duration: const Duration(milliseconds: 300),
+    final screenSize = MediaQuery.of(context).size;
+    final maxWidth = screenSize.width;
+    final maxHeight = screenSize.height;
+    
+    // Don't render WebView here - it's rendered separately in the main Stack
+    
+    // Original controls dock
+    return Positioned(
+      left: _dockPosition.dx.clamp(0.0, maxWidth - 400),
+      top: _dockPosition.dy.clamp(0.0, maxHeight - 80),
+      child: AnimatedOpacity(
+        opacity: _showControls ? 1.0 : 0.0,
+        duration: const Duration(milliseconds: 300),
+        child: GestureDetector(
+          onPanStart: (details) {
+            setState(() {
+              _isDraggingDock = true;
+            });
+          },
+          onPanUpdate: (details) {
+            setState(() {
+              final newX = (_dockPosition.dx + details.delta.dx).clamp(0.0, maxWidth - 400);
+              final newY = (_dockPosition.dy + details.delta.dy).clamp(0.0, maxHeight - 80);
+              _dockPosition = Offset(newX, newY);
+            });
+          },
+          onPanEnd: (details) {
+            setState(() {
+              _isDraggingDock = false;
+            });
+          },
+          child: MouseRegion(
+            cursor: _isDraggingDock ? SystemMouseCursors.grabbing : SystemMouseCursors.grab,
             child: Container(
-              height: 80,
+              constraints: const BoxConstraints(maxWidth: 400),
               decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withOpacity(0.8),
-                    Colors.black.withOpacity(0.4),
-                    Colors.transparent,
-                  ],
+                color: Colors.black.withOpacity(0.85),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.2),
+                  width: 1.5,
                 ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.5),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
               ),
-              child: SafeArea(
+              child: Material(
+                color: Colors.transparent,
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  padding: const EdgeInsets.all(12),
                   child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      // Back button with enhanced styling
-                      _buildTopBarButton(
+                      // Drag handle
+                      MouseRegion(
+                        cursor: SystemMouseCursors.move,
+                        child: Container(
+                          width: 4,
+                          height: 40,
+                          margin: const EdgeInsets.only(right: 8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      
+                      // Back button
+                      _buildDockButton(
                         icon: Icons.arrow_back,
                         onPressed: () => Navigator.of(context).pop(),
                         tooltip: 'Back to Gallery',
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       
-                      // File name and counter with better styling
-                      Expanded(
+                      // File name and counter
+                      Flexible(
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                           decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.3),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.1),
-                              width: 1,
-                            ),
+                            color: Colors.white.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
                           ),
                           child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 path.basename(_currentImageFile.path),
                                 style: const TextStyle(
                                   color: Colors.white,
-                                  fontSize: 16,
+                                  fontSize: 13,
                                   fontWeight: FontWeight.w600,
                                 ),
                                 overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
                               ),
                               if (widget.imageFiles.length > 1)
                                 Text(
                                   '${_currentImageIndex + 1} of ${widget.imageFiles.length}',
                                   style: TextStyle(
-                                    color: Colors.white.withOpacity(0.8),
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w400,
+                                    color: Colors.white.withOpacity(0.7),
+                                    fontSize: 11,
                                   ),
                                 ),
                             ],
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       
-                      // Action buttons with enhanced styling
+                      // Action buttons
                       if (_isEditMode) ...[
-                        _buildTopBarButton(
+                        _buildDockButton(
                           icon: Icons.save,
                           onPressed: _saveTranslations,
                           tooltip: 'Save translations',
                           color: Colors.green,
                         ),
-                        _buildTopBarButton(
+                        const SizedBox(width: 6),
+                        _buildDockButton(
                           icon: Icons.delete,
                           onPressed: _deleteSelectedBox,
                           tooltip: 'Delete selected box',
                           color: Colors.red,
                         ),
+                        const SizedBox(width: 6),
                       ],
                       
-                      _buildTopBarButton(
+                      _buildDockButton(
                         icon: Icons.open_in_new,
                         onPressed: _open_with_photos,
                         tooltip: 'Open with Photos',
                       ),
+                      const SizedBox(width: 6),
+                      
+                      // Grok AI WebView toggle
+                      _buildDockButton(
+                        icon: Icons.chat_bubble_outline,
+                        onPressed: () {
+                          setState(() {
+                            _showWebView = !_showWebView;
+                            // No need to reload - WebView is kept alive with maintainState: true
+                          });
+                        },
+                        tooltip: _showWebView ? 'Hide Grok AI' : 'Show Grok AI',
+                        color: _showWebView ? Colors.blue : null,
+                      ),
+                      const SizedBox(width: 6),
                       
                       // Fullscreen toggle
-                      _buildTopBarButton(
+                      _buildDockButton(
                         icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
                         onPressed: _toggleFullscreen,
                         tooltip: _isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen',
@@ -328,8 +468,457 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
               ),
             ),
           ),
-        );
-      },
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildGrokWebView(double maxWidth, double maxHeight) {
+    final topBarHeight = 70.0; // Height of top bar menu (increased to fit all controls and prevent overflow)
+    final containerHeight = _showWebView ? topBarHeight + _webViewSize.height : topBarHeight;
+    final maxTop = maxHeight - containerHeight;
+    final adjustedTop = _grokContainerPosition.dy.clamp(0.0, maxTop);
+    final adjustedLeft = _grokContainerPosition.dx.clamp(0.0, maxWidth - _webViewSize.width);
+    
+    return Positioned(
+      left: adjustedLeft,
+      top: adjustedTop,
+      child: Visibility(
+        visible: true, // Container always visible, WebView inside is controlled by _showWebView
+        maintainState: true,
+        maintainSize: false,
+        maintainAnimation: true,
+        child: GestureDetector(
+          onPanStart: (details) {
+            if (!_isResizingWebView) {
+              setState(() {
+                _isDraggingGrok = true;
+              });
+            }
+          },
+          onPanUpdate: (details) {
+            if (_isResizingWebView) {
+              // Resize container (affects WebView size)
+              final topBarHeight = 70.0;
+              setState(() {
+                final newWidth = (_resizeStartSize!.width + details.delta.dx).clamp(300.0, maxWidth - _grokContainerPosition.dx);
+                final containerHeight = topBarHeight + (_showWebView ? _webViewSize.height : 0);
+                final maxAllowedHeight = maxHeight - _grokContainerPosition.dy - topBarHeight;
+                final newHeight = (_resizeStartSize!.height + details.delta.dy).clamp(400.0, maxAllowedHeight);
+                _webViewSize = Size(newWidth, newHeight);
+              });
+            } else {
+              // Drag entire container (menu + WebView)
+              final topBarHeight = 70.0;
+              final containerHeight = topBarHeight + (_showWebView ? _webViewSize.height : 0);
+              final maxTop = maxHeight - containerHeight;
+              setState(() {
+                final newX = (_grokContainerPosition.dx + details.delta.dx).clamp(0.0, maxWidth - _webViewSize.width);
+                final newY = (_grokContainerPosition.dy + details.delta.dy).clamp(0.0, maxTop);
+                _grokContainerPosition = Offset(newX, newY);
+              });
+            }
+          },
+          onPanEnd: (details) {
+            setState(() {
+              _isDraggingGrok = false;
+              _isResizingWebView = false;
+            });
+          },
+          child: Container(
+            width: _webViewSize.width,
+            height: containerHeight, // Explicit height to prevent layout issues
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.3),
+                width: 2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.5),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Stack(
+                children: [
+              // Top bar menu - combined controls dock and Grok toggle
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  height: 70, // Increased height to fit all controls and prevent overflow
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.8),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(10),
+                      topRight: Radius.circular(10),
+                    ),
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Drag handle
+                          MouseRegion(
+                            cursor: SystemMouseCursors.move,
+                            child: Container(
+                              width: 4,
+                              height: 40,
+                              margin: const EdgeInsets.only(right: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.3),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                          ),
+                          
+                          // Back button
+                          _buildDockButton(
+                            icon: Icons.arrow_back,
+                            onPressed: () => Navigator.of(context).pop(),
+                            tooltip: 'Back to Gallery',
+                          ),
+                          const SizedBox(width: 6),
+                          
+                          // File name and counter
+                          Flexible(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    path.basename(_currentImageFile.path),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.2,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                  ),
+                                  if (widget.imageFiles.length > 1)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 2),
+                                      child: Text(
+                                        '${_currentImageIndex + 1} of ${widget.imageFiles.length}',
+                                        style: TextStyle(
+                                          color: Colors.white.withOpacity(0.7),
+                                          fontSize: 11,
+                                          height: 1.2,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          
+                          // Action buttons
+                          if (_isEditMode) ...[
+                            _buildDockButton(
+                              icon: Icons.save,
+                              onPressed: _saveTranslations,
+                              tooltip: 'Save translations',
+                              color: Colors.green,
+                            ),
+                            const SizedBox(width: 6),
+                            _buildDockButton(
+                              icon: Icons.delete,
+                              onPressed: _deleteSelectedBox,
+                              tooltip: 'Delete selected box',
+                              color: Colors.red,
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          
+                          _buildDockButton(
+                            icon: Icons.open_in_new,
+                            onPressed: _open_with_photos,
+                            tooltip: 'Open with Photos',
+                          ),
+                          const SizedBox(width: 6),
+                          
+                          // Grok AI WebView toggle
+                          _buildDockButton(
+                            icon: Icons.chat_bubble_outline,
+                            onPressed: () {
+                              setState(() {
+                                _showWebView = !_showWebView;
+                                // No need to reload - WebView is kept alive with maintainState: true
+                              });
+                            },
+                            tooltip: _showWebView ? 'Hide Grok AI' : 'Show Grok AI',
+                            color: _showWebView ? Colors.blue : null,
+                          ),
+                          const SizedBox(width: 6),
+                          
+                          // Reload Grok WebView button (only show when WebView is visible)
+                          if (_showWebView)
+                            _buildDockButton(
+                              icon: Icons.refresh,
+                              onPressed: () async {
+                                if (_grokWebViewController != null) {
+                                  debugPrint('Manually reloading Grok WebView...');
+                                  await _grokWebViewController!.reload();
+                                } else if (_globalWebViewController != null) {
+                                  debugPrint('Manually reloading Grok WebView using global controller...');
+                                  await _globalWebViewController!.reload();
+                                }
+                              },
+                              tooltip: 'Reload Grok AI',
+                              color: Colors.orange,
+                            ),
+                          if (_showWebView) const SizedBox(width: 6),
+                          
+                          _buildDockButton(
+                            icon: Icons.fullscreen,
+                            onPressed: () {
+                              setState(() {
+                                _showControls = !_showControls;
+                              });
+                            },
+                            tooltip: 'Toggle fullscreen',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // Grok WebView - shown when _showWebView is true
+              Positioned(
+                top: 70, // Below top bar
+                left: 0,
+                right: 0,
+                child: Visibility(
+                  visible: _showWebView,
+                  maintainState: true,
+                  maintainSize: true, // Keep size to prevent layout issues
+                  maintainAnimation: true,
+                  child: IgnorePointer(
+                    ignoring: !_showWebView, // Ignore pointer events when hidden
+                    child: SizedBox(
+                      width: _webViewSize.width,
+                      height: _webViewSize.height,
+                      child: InAppWebView(
+                      key: const ValueKey('grok_webview_persistent'), // Fixed key to prevent recreation
+                      initialUrlRequest: URLRequest(
+                        url: WebUri('https://grok.com/'),
+                      ),
+                      initialSettings: InAppWebViewSettings(
+                        javaScriptEnabled: true,
+                        domStorageEnabled: true,
+                        transparentBackground: false,
+                        thirdPartyCookiesEnabled: true,
+                        cacheEnabled: true,
+                        useShouldOverrideUrlLoading: true,
+                        supportMultipleWindows: true,
+                        javaScriptCanOpenWindowsAutomatically: true,
+                        // Use desktop user agent for Windows
+                        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                      ),
+                      onWebViewCreated: (controller) {
+                        // Store controller globally and locally
+                        _grokWebViewController = controller;
+                        _globalWebViewController = controller;
+                        _isReloadingWebView = false;
+                        
+                        // Only load URL once globally (first time app opens)
+                        if (!_globalWebViewLoaded) {
+                          debugPrint('Grok WebView created for the first time globally - loading URL');
+                          WidgetsBinding.instance.addPostFrameCallback((_) async {
+                            if (mounted && _grokWebViewController != null && !_globalWebViewLoaded) {
+                              await Future.delayed(const Duration(milliseconds: 300));
+                              if (mounted && _grokWebViewController != null && !_globalWebViewLoaded) {
+                                try {
+                                  if (_grokWebViewController == null || !mounted) {
+                                    debugPrint('WebView controller is null or widget unmounted, skipping load');
+                                    return;
+                                  }
+                                  final currentUrl = await _grokWebViewController!.getUrl();
+                                  if (currentUrl == null || currentUrl.toString().isEmpty || currentUrl.toString() == 'about:blank') {
+                                    debugPrint('WebView is blank, loading URL for the first time globally...');
+                                    if (_grokWebViewController != null && mounted) {
+                                      await _grokWebViewController!.loadUrl(
+                                        urlRequest: URLRequest(
+                                          url: WebUri('https://grok.com/'),
+                                        ),
+                                      );
+                                      _globalWebViewLoaded = true;
+                                      _hasWebViewLoaded = true;
+                                      debugPrint('WebView loaded globally - will not reload on future instances');
+                                    }
+                                  } else {
+                                    debugPrint('WebView already has URL: $currentUrl, marking as loaded globally');
+                                    _globalWebViewLoaded = true;
+                                    _hasWebViewLoaded = true;
+                                  }
+                                } catch (e) {
+                                  debugPrint('Error checking/loading URL: $e');
+                                  _globalWebViewLoaded = true;
+                                  _hasWebViewLoaded = true;
+                                }
+                              }
+                            }
+                          });
+                        } else {
+                          // WebView already loaded globally - reuse existing controller
+                          debugPrint('WebView already loaded globally - reusing controller without reload');
+                          _hasWebViewLoaded = true;
+                        }
+                      },
+                      onLoadStart: (controller, url) {
+                        debugPrint('Grok WebView load start: $url');
+                      },
+                      onLoadStop: (controller, url) async {
+                        debugPrint('Grok WebView load stop: $url');
+                        try {
+                          // Wait a bit for page to fully render
+                          await Future.delayed(const Duration(milliseconds: 500));
+                          // Inject CSS to ensure mobile responsive view
+                          await controller.evaluateJavascript(source: '''
+                            (function() {
+                              var meta = document.querySelector('meta[name="viewport"]');
+                              if (!meta) {
+                                meta = document.createElement('meta');
+                                meta.name = 'viewport';
+                                document.getElementsByTagName('head')[0].appendChild(meta);
+                              }
+                              meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+                              
+                              // Also try to set body width for better mobile view
+                              var body = document.body;
+                              if (body) {
+                                body.style.width = '100%';
+                                body.style.maxWidth = '100%';
+                                body.style.overflowX = 'hidden';
+                              }
+                            })();
+                          ''');
+                        } catch (e) {
+                          debugPrint('Error injecting viewport meta: $e');
+                        }
+                      },
+                      onReceivedError: (controller, request, error) {
+                        // Ignore expected connection errors during initialization (common on Windows)
+                        if (error.type == WebResourceErrorType.CANCELLED || 
+                            error.type == WebResourceErrorType.CONNECTION_ABORTED) {
+                          // These are expected during WebView initialization on Windows and can be safely ignored
+                          return;
+                        }
+                        // Only log actual errors that need attention
+                        debugPrint('Grok WebView error: ${error.description} (type: ${error.type})');
+                      },
+                      onReceivedHttpError: (controller, request, response) {
+                        final statusCode = response.statusCode;
+                        debugPrint('Grok WebView HTTP error: $statusCode');
+                      },
+                      shouldOverrideUrlLoading: (controller, navigationAction) async {
+                        // Allow all navigation
+                        return NavigationActionPolicy.ALLOW;
+                      },
+                      onCreateWindow: (controller, createWindowAction) async {
+                        debugPrint('Grok WebView create window: ${createWindowAction.request.url}');
+                        await controller.loadUrl(urlRequest: createWindowAction.request);
+                        return true;
+                      },
+                      onReceivedServerTrustAuthRequest: (controller, challenge) async {
+                        return ServerTrustAuthResponse(action: ServerTrustAuthResponseAction.PROCEED);
+                      },
+                    ),
+                    ),
+                  ),
+                ),
+              ),
+              // Resize handle (bottom-right corner) - only show when WebView is visible
+              ...(_showWebView ? [
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: GestureDetector(
+                    onPanStart: (details) {
+                      setState(() {
+                        _isResizingWebView = true;
+                        _resizeStartSize = _webViewSize;
+                        _resizeStartPosition = details.localPosition;
+                      });
+                    },
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeDownRight,
+                      child: Container(
+                        width: 20,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          color: Colors.blue.withOpacity(0.7),
+                          borderRadius: const BorderRadius.only(
+                            bottomRight: Radius.circular(10),
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.drag_handle,
+                          size: 12,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ] : []),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildDockButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    required String tooltip,
+    Color? color,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              icon,
+              color: color ?? Colors.white,
+              size: 18,
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -510,14 +1099,14 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
                                 ),
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
+            ],
+          ),
+        ),
+      ),
+      ),
+      ),
+    );
+  },
           ),
         ),
         
@@ -784,6 +1373,34 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
       _currentRect = null;
       _imageSize = null;
     });
+
+    // Update current page ID
+    if (widget.pages != null && index < widget.pages!.length) {
+      // Match by index first (most reliable)
+      _currentPageId = widget.pages![index].pageId;
+      debugPrint('ViewerScreen: Navigated to image $index, set pageId to $_currentPageId');
+    } else if (widget.pages != null && widget.pages!.isNotEmpty) {
+      // Fallback: try to match by file path
+      final matchingPage = widget.pages!.firstWhere(
+        (p) => p.storagePath == _currentImageFile.path,
+        orElse: () => widget.pages![0],
+      );
+      _currentPageId = matchingPage.pageId;
+      debugPrint('ViewerScreen: Navigated to image $index, set pageId to $_currentPageId (fallback)');
+    } else {
+      // Try to find page by file path (async)
+      _currentPageId = null;
+      debugPrint('ViewerScreen: No pages provided, trying to find pageId by path');
+      _findPageIdByPath(_currentImageFile.path).then((pageId) {
+        if (mounted) {
+          debugPrint('ViewerScreen: Found pageId by path: $pageId');
+          setState(() {
+            _currentPageId = pageId;
+          });
+          _loadTranslations();
+        }
+      });
+    }
     
     _fadeController.reset();
     _fadeController.forward();
@@ -1270,6 +1887,46 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
   }
 
   Future<void> _loadTranslations() async {
+    setState(() {
+      _translations.clear();
+    });
+
+    // Try to load from database first
+    if (_currentPageId != null && _overlayBoxRepository != null) {
+      try {
+        debugPrint('ViewerScreen: Loading translations for pageId: $_currentPageId');
+        final overlayBoxes = await _overlayBoxRepository!.getOverlayBoxesByPageId(_currentPageId!);
+        debugPrint('ViewerScreen: Loaded ${overlayBoxes.length} overlay boxes from database');
+        
+        final newTranslations = overlayBoxes.map((box) {
+          // Convert OverlayBoxModel to Translation
+          // OverlayBox uses x, y, width, height (normalized 0-1)
+          // Translation uses left, top, right, bottom (normalized 0-1)
+          return Translation(
+            left: box.x,
+            top: box.y,
+            right: box.x + box.width,
+            bottom: box.y + box.height,
+            text: box.translatedText ?? box.originalText ?? '',
+          );
+        }).toList();
+        
+        debugPrint('ViewerScreen: Converted to ${newTranslations.length} translations');
+        setState(() {
+          _translations.clear();
+          _translations.addAll(newTranslations);
+        });
+        return;
+      } catch (e, stackTrace) {
+        debugPrint('ViewerScreen: Error loading translations from database: $e');
+        debugPrint('ViewerScreen: Stack trace: $stackTrace');
+        // Fall back to JSON if database fails
+      }
+    } else {
+      debugPrint('ViewerScreen: Cannot load from database - pageId: $_currentPageId, repository: ${_overlayBoxRepository != null}');
+    }
+
+    // Fall back to JSON file (for backward compatibility)
     final jsonPath = '${path.withoutExtension(_currentImageFile.path)}.json';
     final jsonFile = File(jsonPath);
     if (await jsonFile.exists()) {
@@ -1283,16 +1940,68 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
   }
 
   Future<void> _saveTranslations() async {
-    final jsonPath = '${path.withoutExtension(_currentImageFile.path)}.json';
-    final jsonFile = File(jsonPath);
-    final jsonString = json.encode(_translations.map((t) => t.toJson()).toList());
-    await jsonFile.writeAsString(jsonString);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Translations saved!'),
-        backgroundColor: Colors.green,
-      ),
-    );
+    debugPrint('ViewerScreen: Saving translations - pageId: $_currentPageId, repository: ${_overlayBoxRepository != null}, count: ${_translations.length}');
+    
+    if (_currentPageId == null || _overlayBoxRepository == null) {
+      debugPrint('ViewerScreen: Cannot save to database, falling back to JSON');
+      // Fall back to JSON if no page ID
+      final jsonPath = '${path.withoutExtension(_currentImageFile.path)}.json';
+      final jsonFile = File(jsonPath);
+      final jsonString = json.encode(_translations.map((t) => t.toJson()).toList());
+      await jsonFile.writeAsString(jsonString);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Translations saved to JSON!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      return;
+    }
+
+    try {
+      debugPrint('ViewerScreen: Deleting existing overlay boxes for pageId: $_currentPageId');
+      // Delete existing overlay boxes for this page
+      await _overlayBoxRepository!.deleteOverlayBoxesByPageId(_currentPageId!);
+
+      // Create new overlay boxes
+      final now = DateTime.now();
+      debugPrint('ViewerScreen: Creating ${_translations.length} new overlay boxes');
+      for (int i = 0; i < _translations.length; i++) {
+        final translation = _translations[i];
+        final overlayBox = OverlayBoxModel(
+          pageId: _currentPageId!,
+          x: translation.left,
+          y: translation.top,
+          width: translation.right - translation.left,
+          height: translation.bottom - translation.top,
+          translatedText: translation.text,
+          createdAt: now,
+          updatedAt: now,
+        );
+        final overlayId = await _overlayBoxRepository!.createOverlayBox(overlayBox);
+        debugPrint('ViewerScreen: Created overlay box $i with id: $overlayId');
+      }
+
+      debugPrint('ViewerScreen: Successfully saved ${_translations.length} overlay boxes');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Translations saved to database!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      
+      // Reload translations to ensure UI is in sync
+      await _loadTranslations();
+    } catch (e, stackTrace) {
+      debugPrint('ViewerScreen: Error saving translations: $e');
+      debugPrint('ViewerScreen: Stack trace: $stackTrace');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error saving translations: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   void _deleteSelectedBox() {
