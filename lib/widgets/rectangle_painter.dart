@@ -12,6 +12,7 @@ class RectanglePainter extends CustomPainter {
   final Offset? imageOffset; // Position where the image starts on screen
   final bool showText;
   final bool isEditMode;
+  final Matrix4? transformMatrix; // Zoom/Pan transformation matrix
 
   RectanglePainter({
     required this.translations, 
@@ -23,21 +24,19 @@ class RectanglePainter extends CustomPainter {
     this.imageOffset,
     this.showText = true,
     this.isEditMode = false,
+    this.transformMatrix,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Debug: Draw a semi-transparent background to verify overlay is working
-    // Remove this once you confirm it's working
-    if (selectedBoxIndex != null || currentRect != null) {
-      final debugPaint = Paint()
-        ..color = Colors.green.withValues(alpha: 0.1)
-        ..style = PaintingStyle.fill;
-      canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), debugPaint);
-    }
-
     // Don't draw anything if we don't have image positioning info
     if (displayedImageSize == null || imageOffset == null) return;
+
+    // Apply transformation if zoom/pan is active
+    if (transformMatrix != null) {
+      canvas.save();
+      canvas.transform(transformMatrix!.storage);
+    }
 
     final paint = Paint()
       ..color = Colors.yellow.withValues(alpha: 0.5)
@@ -111,9 +110,14 @@ class RectanglePainter extends CustomPainter {
       }
     }
 
-    // Draw the current box being created (in screen coordinates)
+    // Draw the current box being created
     if (currentRect != null) {
       canvas.drawRect(currentRect!, paint);
+    }
+
+    // Restore canvas state if we applied transformation
+    if (transformMatrix != null) {
+      canvas.restore();
     }
   }
 

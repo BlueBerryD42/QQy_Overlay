@@ -23,11 +23,25 @@ class _TagSelectorState extends State<TagSelector> {
   List<TagGroupModel> _tagGroups = [];
   bool _isLoading = true;
   final Map<int, List<TagModel>> _tagsByGroup = {};
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  final int _maxVisibleTags = 10; // Show max 10 tags, rest via search
 
   @override
   void initState() {
     super.initState();
     _loadTags();
+    _searchController.addListener(() {
+      setState(() {
+        _searchQuery = _searchController.text.toLowerCase();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadTags() async {
@@ -58,6 +72,33 @@ class _TagSelectorState extends State<TagSelector> {
         );
       }
     }
+  }
+
+  List<TagModel> get _filteredTags {
+    if (_searchQuery.isEmpty) {
+      // Show selected tags first, then unselected (limited)
+      final selected = _allTags.where((t) => 
+        t.tagId != null && widget.selectedTagIds.contains(t.tagId)).toList();
+      final unselected = _allTags.where((t) => 
+        t.tagId == null || !widget.selectedTagIds.contains(t.tagId)).toList();
+      
+      return [
+        ...selected,
+        ...unselected.take(_maxVisibleTags - selected.length),
+      ];
+    } else {
+      // Filter by search query
+      return _allTags.where((tag) => 
+        tag.name.toLowerCase().contains(_searchQuery)
+      ).toList();
+    }
+  }
+
+  int get _hiddenTagsCount {
+    if (_searchQuery.isNotEmpty) return 0;
+    final visible = _filteredTags.length;
+    final total = _allTags.length;
+    return total > visible ? total - visible : 0;
   }
 
   Future<void> _createTag() async {
@@ -98,6 +139,9 @@ class _TagSelectorState extends State<TagSelector> {
       return const Center(child: CircularProgressIndicator());
     }
 
+    final selectedTags = _allTags.where((t) => 
+      t.tagId != null && widget.selectedTagIds.contains(t.tagId)).toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -116,67 +160,138 @@ class _TagSelectorState extends State<TagSelector> {
           ],
         ),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: _buildTagChips(),
+        
+        // Selected tags (always visible, removable)
+        if (selectedTags.isNotEmpty) ...[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: selectedTags.map((tag) => _buildSelectedTagChip(tag)).toList(),
+          ),
+          const SizedBox(height: 12),
+        ],
+        
+        // Search bar
+        TextField(
+          controller: _searchController,
+          decoration: InputDecoration(
+            hintText: _searchQuery.isEmpty 
+                ? 'Search tags... (${_allTags.length} total)'
+                : 'Searching...',
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon: _searchQuery.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: () {
+                      _searchController.clear();
+                    },
+                  )
+                : null,
+            filled: true,
+            fillColor: Theme.of(context).brightness == Brightness.dark
+                ? Colors.grey.shade800
+                : Colors.grey.shade100,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(
+                color: Colors.grey.shade600,
+              ),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(
+                color: Colors.grey.shade600,
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(
+                color: Theme.of(context).primaryColor,
+                width: 2,
+              ),
+            ),
+          ),
         ),
+        const SizedBox(height: 12),
+        
+        // Available tags (filtered)
+        if (_filteredTags.isNotEmpty || _searchQuery.isNotEmpty)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ..._filteredTags.where((tag) => 
+                tag.tagId == null || !widget.selectedTagIds.contains(tag.tagId)
+              ).map((tag) => _buildTagChip(tag)),
+            ],
+          ),
+        
+        // Show "X more tags" indicator
+        if (_hiddenTagsCount > 0 && _searchQuery.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: TextButton.icon(
+              onPressed: () {
+                // Focus search to show all tags
+                FocusScope.of(context).requestFocus(FocusNode());
+                _searchController.clear();
+                _searchController.text = ' '; // Trigger search
+                _searchController.clear();
+              },
+              icon: const Icon(Icons.expand_more),
+              label: Text('$_hiddenTagsCount more tags (use search to find)'),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.grey.shade400,
+              ),
+            ),
+          ),
       ],
     );
   }
 
-  List<Widget> _buildTagChips() {
-    final chips = <Widget>[];
-
-    // Add ungrouped tags
-    final ungroupedTags = _tagsByGroup[0] ?? [];
-    for (final tag in ungroupedTags) {
-      chips.add(_buildTagChip(tag));
-    }
-
-    // Add grouped tags
-    for (final group in _tagGroups) {
-      final groupTags = _tagsByGroup[group.groupId] ?? [];
-      if (groupTags.isEmpty) continue;
-
-      chips.add(
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey.shade300),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                group.name,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
-                  color: Colors.grey,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Wrap(
-                spacing: 4,
-                runSpacing: 4,
-                children: groupTags.map((tag) => _buildTagChip(tag)).toList(),
-              ),
-            ],
-          ),
+  Widget _buildSelectedTagChip(TagModel tag) {
+    return Chip(
+      label: Text(
+        tag.name,
+        style: TextStyle(
+          color: tag.isSensitive ? Colors.red.shade100 : Colors.white,
+          fontWeight: FontWeight.w500,
         ),
-      );
-    }
-
-    return chips;
+      ),
+      backgroundColor: tag.isSensitive 
+          ? Colors.red.shade700.withOpacity(0.8)
+          : Theme.of(context).primaryColor,
+      deleteIcon: Icon(
+        Icons.close,
+        size: 18,
+        color: tag.isSensitive ? Colors.red.shade100 : Colors.white,
+      ),
+      onDeleted: () {
+        final newSelection = List<int>.from(widget.selectedTagIds);
+        if (tag.tagId != null) {
+          newSelection.remove(tag.tagId!);
+        }
+        widget.onSelectionChanged(newSelection);
+      },
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    );
   }
 
   Widget _buildTagChip(TagModel tag) {
     final isSelected = widget.selectedTagIds.contains(tag.tagId);
     
     return FilterChip(
-      label: Text(tag.name),
+      label: Text(
+        tag.name,
+        style: TextStyle(
+          color: isSelected 
+              ? (tag.isSensitive ? Colors.red.shade100 : Colors.white)
+              : (Theme.of(context).brightness == Brightness.dark
+                  ? Colors.white
+                  : Colors.black87),
+          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+        ),
+      ),
       selected: isSelected,
       onSelected: (selected) {
         final newSelection = List<int>.from(widget.selectedTagIds);
@@ -192,11 +307,21 @@ class _TagSelectorState extends State<TagSelector> {
         widget.onSelectionChanged(newSelection);
       },
       selectedColor: tag.isSensitive 
-          ? Colors.red.shade100 
-          : Theme.of(context).primaryColor.withOpacity(0.2),
-      checkmarkColor: tag.isSensitive 
-          ? Colors.red.shade700 
+          ? Colors.red.shade700.withOpacity(0.8)
           : Theme.of(context).primaryColor,
+      checkmarkColor: tag.isSensitive 
+          ? Colors.red.shade100
+          : Colors.white,
+      backgroundColor: Theme.of(context).brightness == Brightness.dark
+          ? Colors.grey.shade800
+          : Colors.grey.shade200,
+      side: BorderSide(
+        color: isSelected
+            ? (tag.isSensitive ? Colors.red.shade400 : Theme.of(context).primaryColor)
+            : Colors.grey.shade600,
+        width: isSelected ? 2 : 1,
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
     );
   }
 }
@@ -297,4 +422,3 @@ class _CreateTagDialogState extends State<_CreateTagDialog> {
     );
   }
 }
-

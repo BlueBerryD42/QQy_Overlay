@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("QRganize.API")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+964de6883479df5b82e03c5cd456dfdb55dd527a")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ea7c209fb686a3fd95d6b68b3d6776b3109e7df3")]
 [assembly: System.Reflection.AssemblyProductAttribute("QRganize.API")]
 [assembly: System.Reflection.AssemblyTitleAttribute("QRganize.API")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

@@ -15,6 +15,7 @@ import '../services/database_service.dart';
 import '../repositories/page_repository.dart';
 import '../repositories/overlay_box_repository.dart';
 import '../widgets/rectangle_painter.dart';
+import '../services/ocr_service.dart';
 
 class ViewerScreen extends StatefulWidget {
   final List<File> imageFiles;
@@ -46,6 +47,8 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
   Size? _imageSize;
   Size? _displayedImageSize;
   Offset? _imageOffset;
+  Offset? _actualImageOffset; // NEW: Track ACTUAL image offset from Image widget
+  Size? _actualImageSize;     // NEW: Track ACTUAL displayed size from Image widget
   Offset? _dragStart;
   bool _isResizing = false;
   bool _isDragging = false;
@@ -100,6 +103,13 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
   PageRepository? _pageRepository;
   OverlayBoxRepository? _overlayBoxRepository;
   int? _currentPageId;
+  
+  // OCR service
+  OcrService? _ocrService;
+  bool _isProcessingOcr = false;
+  
+  // Zoom/Pan controller
+  final TransformationController _transformationController = TransformationController();
 
   @override
   void initState() {
@@ -131,6 +141,9 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
       _loadImageSize();
       _loadTranslations();
     });
+    
+    // Initialize OCR service
+    _ocrService = OcrService();
   }
 
   Future<void> _initializeDatabase() async {
@@ -180,8 +193,10 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
     _fadeController.dispose();
     _slideController.dispose();
     _focusNode.dispose();
+    _transformationController.dispose();
     _removeContextMenu();
     _removeTooltip();
+    _ocrService?.dispose();
     _dbService.dispose();
     super.dispose();
   }
@@ -241,54 +256,86 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
                   builder: (context, constraints) {
                     _calculateImageBounds(constraints);
                     
-                    return Stack(
-                      children: [
-                        // Image centered in the screen
-                        Center(
-                          child: Hero(
-                            tag: _currentImageFile.path,
-                            child: Image.file(
-                              _currentImageFile,
-                              fit: BoxFit.contain,
+                    return InteractiveViewer(
+                      transformationController: _transformationController,
+                      minScale: 0.5,
+                      maxScale: 5.0,
+                      boundaryMargin: const EdgeInsets.all(100),
+                      panEnabled: !_isEditMode, // Disable pan in edit mode to allow box creation
+                      scaleEnabled: !_isEditMode, // Disable zoom in edit mode
+                      constrained: false,
+                      child: SizedBox(
+                        width: constraints.maxWidth,
+                        height: constraints.maxHeight,
+                        child: Stack(
+                          children: [
+                            // Image centered in the screen
+                            Center(
+                              child: Hero(
+                                tag: _currentImageFile.path,
+                                child: Image.file(
+                                  _currentImageFile,
+                                  fit: BoxFit.contain,
+                                  key: const ValueKey('main_image'),
+                                  frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                                    // Calculate ACTUAL image position after layout
+                                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                                      final renderBox = context.findRenderObject() as RenderBox?;
+                                      if (renderBox != null && renderBox.hasSize) {
+                                        final imagePosition = renderBox.localToGlobal(Offset.zero);
+                                        final imageSize = renderBox.size;
+                                        
+                                        // Update ACTUAL offset and size
+                                        setState(() {
+                                          _actualImageOffset = imagePosition;
+                                          _actualImageSize = imageSize;
+                                        });
+                                      }
+                                    });
+                                    return child;
+                                  },
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                        // Main image interaction layer
-                        Positioned.fill(
-                          child: MouseRegion(
-                            cursor: _currentCursor,
-                            onHover: _onHover,
-                            onExit: (_) => _removeTooltip(),
-                            child: Listener(
-                              onPointerDown: (event) {
-                                if (event.buttons == kSecondaryMouseButton) {
-                                  _onRightClick(event);
-                                }
-                              },
-                              child: GestureDetector(
-                                onTapDown: _isEditMode ? _onTapDown : _onViewTapDown,
-                                onPanStart: _isEditMode ? _onPanStart : null,
-                                onPanUpdate: _isEditMode ? _onPanUpdate : null,
-                                onPanEnd: _isEditMode ? _onPanEnd : null,
-                                onDoubleTapDown: _isEditMode ? _onDoubleTapDown : null,
-                                child: CustomPaint(
-                                  painter: RectanglePainter(
-                                    translations: _showOverlays ? _translations : [],
-                                    currentRect: _currentRect,
-                                    selectedBoxIndex: _isEditMode ? _selectedBoxIndex : null,
-                                    hoveredBoxIndex: _hoveredBoxIndex,
-                                    imageSize: _imageSize!,
-                                    displayedImageSize: _displayedImageSize,
-                                    imageOffset: _imageOffset,
-                                    showText: _isEditMode,
-                                    isEditMode: _isEditMode,
+                            // Main image interaction layer
+                            Positioned.fill(
+                              child: MouseRegion(
+                                cursor: _currentCursor,
+                                onHover: _onHover,
+                                onExit: (_) => _removeTooltip(),
+                                child: Listener(
+                                  onPointerDown: (event) {
+                                    if (event.buttons == kSecondaryMouseButton) {
+                                      _onRightClick(event);
+                                    }
+                                  },
+                                  child: GestureDetector(
+                                    onTapDown: _isEditMode ? _onTapDown : _onViewTapDown,
+                                    onPanStart: _isEditMode ? _onPanStart : null,
+                                    onPanUpdate: _isEditMode ? _onPanUpdate : null,
+                                    onPanEnd: _isEditMode ? _onPanEnd : null,
+                                    onDoubleTapDown: _isEditMode ? _onDoubleTapDown : null,
+                                    child: CustomPaint(
+                                      painter: RectanglePainter(
+                                        translations: _showOverlays ? _translations : [],
+                                        currentRect: _currentRect,
+                                        selectedBoxIndex: _isEditMode ? _selectedBoxIndex : null,
+                                        hoveredBoxIndex: _hoveredBoxIndex,
+                                        imageSize: _imageSize!,
+                                        displayedImageSize: _actualImageSize ?? _displayedImageSize, // Use ACTUAL if available
+                                        imageOffset: _actualImageOffset ?? _imageOffset,            // Use ACTUAL if available
+                                        showText: _isEditMode,
+                                        isEditMode: _isEditMode,
+                                        transformMatrix: _transformationController.value, // Pass transform for zoom/pan
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
+                          ],
                         ),
-                      ],
+                      ),
                     );
                   },
                 ),
@@ -670,6 +717,18 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
                             color: _showWebView ? Colors.blue : null,
                           ),
                           const SizedBox(width: 6),
+                          
+                          // OCR button (only show in edit mode when box is selected)
+                          if (_isEditMode && _selectedBoxIndex != null)
+                            _buildDockButton(
+                              icon: Icons.text_fields,
+                              onPressed: _isProcessingOcr 
+                                ? () {} // Empty function when processing
+                                : () => _performOcrForBox(_selectedBoxIndex!),
+                              tooltip: _isProcessingOcr ? 'Processing OCR...' : 'OCR Selected Box',
+                              color: _isProcessingOcr ? Colors.grey : Colors.purple,
+                            ),
+                          if (_isEditMode && _selectedBoxIndex != null) const SizedBox(width: 6),
                           
                           // Reload Grok WebView button (only show when WebView is visible)
                           if (_showWebView)
@@ -1237,9 +1296,37 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
           _nextImage();
           return KeyEventResult.handled;
         case LogicalKeyboardKey.escape:
+          // Priority 1: If currently drawing an overlay box, cancel it
+          if (_currentRect != null) {
+            setState(() {
+              _currentRect = null;
+              _currentCursor = SystemMouseCursors.basic;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Overlay creation cancelled'),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 1),
+              ),
+            );
+            return KeyEventResult.handled;
+          }
+          // Priority 2: If OCR is processing, show warning but don't cancel (let it finish)
+          if (_isProcessingOcr) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('OCR in progress, please wait...'),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 1),
+              ),
+            );
+            return KeyEventResult.handled;
+          }
+          // Priority 3: If in fullscreen, exit fullscreen
           if (_isFullscreen) {
             _toggleFullscreen();
           } else {
+            // Priority 4: Exit to gallery
             Navigator.of(context).pop();
           }
           return KeyEventResult.handled;
@@ -1259,9 +1346,41 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
             _deleteSelectedBox();
           }
           return KeyEventResult.handled;
+        case LogicalKeyboardKey.keyR:
+          // Reset zoom/pan (press R)
+          _resetZoom();
+          return KeyEventResult.handled;
+        case LogicalKeyboardKey.digit0:
+          // Reset zoom/pan (press 0)
+          if (event.logicalKey == LogicalKeyboardKey.digit0) {
+            _resetZoom();
+            return KeyEventResult.handled;
+          }
+          break;
       }
     }
     return KeyEventResult.ignored;
+  }
+  
+  void _resetZoom() {
+    setState(() {
+      _transformationController.value = Matrix4.identity();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Row(
+          children: [
+            Icon(Icons.zoom_out_map, color: Colors.white),
+            SizedBox(width: 8),
+            Text('Zoom reset to 100%'),
+          ],
+        ),
+        backgroundColor: Colors.blue.withOpacity(0.9),
+        duration: const Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+      ),
+    );
   }
 
   void _showCarousel() {
@@ -1365,6 +1484,9 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
     // Add haptic feedback
     HapticFeedback.lightImpact();
     
+    // Reset zoom/pan when changing images
+    _transformationController.value = Matrix4.identity();
+    
     setState(() {
       _currentImageIndex = index;
       _currentImageFile = widget.imageFiles[index];
@@ -1448,34 +1570,42 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
   }
 
   bool _isPointInImage(Offset point) {
-    if (_imageOffset == null || _displayedImageSize == null) return false;
+    // Use ACTUAL offset/size for consistency
+    final effectiveOffset = _actualImageOffset ?? _imageOffset;
+    final effectiveSize = _actualImageSize ?? _displayedImageSize;
+    
+    if (effectiveOffset == null || effectiveSize == null) return false;
     
     final imageRect = Rect.fromLTWH(
-      _imageOffset!.dx,
-      _imageOffset!.dy,
-      _displayedImageSize!.width,
-      _displayedImageSize!.height,
+      effectiveOffset.dx,
+      effectiveOffset.dy,
+      effectiveSize.width,
+      effectiveSize.height,
     );
     
     return imageRect.contains(point);
   }
 
   Offset _globalToImageCoordinates(Offset globalPosition) {
-    if (_imageOffset == null || _displayedImageSize == null) {
+    // Use ACTUAL offset for consistency
+    final effectiveOffset = _actualImageOffset ?? _imageOffset;
+    
+    if (effectiveOffset == null) {
       return Offset.zero;
     }
     
+    // Return position relative to image top-left (but still in screen pixels)
     return Offset(
-      globalPosition.dx - _imageOffset!.dx,
-      globalPosition.dy - _imageOffset!.dy,
+      globalPosition.dx - effectiveOffset.dx,
+      globalPosition.dy - effectiveOffset.dy,
     );
   }
 
   void _onRightClick(PointerDownEvent event) {
     if (!_isPointInImage(event.localPosition)) return;
 
-    final imagePosition = _globalToImageCoordinates(event.localPosition);
-    final tappedIndex = _getTappedBoxIndex(imagePosition);
+    // Pass screen coordinates directly
+    final tappedIndex = _getTappedBoxIndex(event.localPosition);
 
     if (_isEditMode && tappedIndex != null) {
       _showContextMenu(event.position, tappedIndex);
@@ -1517,6 +1647,11 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
                   icon: Icons.edit,
                   text: 'Edit Text',
                   onTap: () => _contextMenuAction(() => _editBoxText(boxIndex)),
+                ),
+                _buildContextMenuItem(
+                  icon: Icons.text_fields,
+                  text: 'OCR Text',
+                  onTap: () => _contextMenuAction(() => _performOcrForBox(boxIndex)),
                 ),
                 _buildContextMenuItem(
                   icon: Icons.content_copy,
@@ -1682,6 +1817,11 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
     // Add haptic feedback
     HapticFeedback.mediumImpact();
     
+    // If switching TO Edit Mode, reset zoom to 1:1 for accurate overlay drawing
+    if (!_isEditMode) {
+      _transformationController.value = Matrix4.identity();
+    }
+    
     setState(() {
       _isEditMode = !_isEditMode;
       _selectedBoxIndex = null;
@@ -1705,7 +1845,7 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
             ),
             const SizedBox(width: 8),
             Text(
-              _isEditMode ? 'Edit Mode: Create and edit translation boxes' : 'View Mode: Navigate and view translations',
+              _isEditMode ? 'Edit Mode: Zoom locked at 100% for accurate overlay drawing' : 'View Mode: Zoom/pan enabled for navigation',
               style: const TextStyle(fontSize: 14),
             ),
           ],
@@ -1733,8 +1873,8 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
       return;
     }
     
-    final imagePosition = _globalToImageCoordinates(details.localPosition);
-    final tappedIndex = _getTappedBoxIndex(imagePosition);
+    // Pass screen coordinates directly
+    final tappedIndex = _getTappedBoxIndex(details.localPosition);
     setState(() {
       _selectedBoxIndex = tappedIndex;
     });
@@ -1749,8 +1889,8 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
     if (!_isEditMode || !_isPointInImage(details.localPosition)) return;
 
     _removeContextMenu();
-    final imagePosition = _globalToImageCoordinates(details.localPosition);
-    final tappedIndex = _getTappedBoxIndex(imagePosition);
+    // Pass screen coordinates directly (not image-relative)
+    final tappedIndex = _getTappedBoxIndex(details.localPosition);
     
     if (tappedIndex != null) {
       setState(() {
@@ -1758,7 +1898,8 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
       });
       
       final selectedRect = _getAbsoluteRect(_translations[tappedIndex]);
-      _resizeHandle = _getResizeHandle(imagePosition, selectedRect);
+      // Use screen coordinates for resize handle detection
+      _resizeHandle = _getResizeHandle(details.localPosition, selectedRect);
       
       if (_resizeHandle != null) {
         _isResizing = true;
@@ -1806,28 +1947,82 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
     if (_currentRect != null &&
         _currentRect!.width > 10 &&
         _currentRect!.height > 10 &&
-        _displayedImageSize != null &&
-        _imageOffset != null) {
+        _imageSize != null) {
+      
+      // Use ACTUAL offset/size if available, otherwise use calculated values
+      final effectiveOffset = _actualImageOffset ?? _imageOffset;
+      final effectiveSize = _actualImageSize ?? _displayedImageSize;
+      
+      if (effectiveOffset == null || effectiveSize == null) {
+        debugPrint('ViewerScreen: ERROR - No effective offset/size available!');
+        setState(() {
+          _currentRect = null;
+          _currentCursor = SystemMouseCursors.basic;
+        });
+        return;
+      }
+      
+      // Debug: Print current state
+      debugPrint('ViewerScreen: ===== OVERLAY CREATION DEBUG =====');
+      debugPrint('ViewerScreen: _currentRect (screen): ${_currentRect!.left.toStringAsFixed(1)}, ${_currentRect!.top.toStringAsFixed(1)}, ${_currentRect!.right.toStringAsFixed(1)}, ${_currentRect!.bottom.toStringAsFixed(1)}');
+      debugPrint('ViewerScreen: effectiveOffset: ${effectiveOffset.dx.toStringAsFixed(1)}, ${effectiveOffset.dy.toStringAsFixed(1)}');
+      debugPrint('ViewerScreen: effectiveSize: ${effectiveSize.width.toStringAsFixed(1)}x${effectiveSize.height.toStringAsFixed(1)}');
+      debugPrint('ViewerScreen: imageSize: ${_imageSize!.width.toInt()}x${_imageSize!.height.toInt()}');
+      
+      // IMPORTANT: _currentRect is in absolute screen coordinates
+      // We need to convert to coordinates RELATIVE to the displayed image
+      
+      // Step 1: Convert screen coords to displayed image coords (subtract ACTUAL offset)
+      final displayedLeft = _currentRect!.left - effectiveOffset.dx;
+      final displayedTop = _currentRect!.top - effectiveOffset.dy;
+      final displayedRight = _currentRect!.right - effectiveOffset.dx;
+      final displayedBottom = _currentRect!.bottom - effectiveOffset.dy;
+      
+      debugPrint('ViewerScreen: Displayed coords: ${displayedLeft.toStringAsFixed(1)}, ${displayedTop.toStringAsFixed(1)}, ${displayedRight.toStringAsFixed(1)}, ${displayedBottom.toStringAsFixed(1)}');
+      
+      // Step 2: Convert to relative coordinates (0-1) based on ACTUAL displayed size
+      final relativeLeft = displayedLeft / effectiveSize.width;
+      final relativeTop = displayedTop / effectiveSize.height;
+      final relativeRight = displayedRight / effectiveSize.width;
+      final relativeBottom = displayedBottom / effectiveSize.height;
+      
+      debugPrint('ViewerScreen: Relative coords: ${relativeLeft.toStringAsFixed(4)}, ${relativeTop.toStringAsFixed(4)}, ${relativeRight.toStringAsFixed(4)}, ${relativeBottom.toStringAsFixed(4)}');
       
       final imageRect = Rect.fromLTRB(
-        (_currentRect!.left - _imageOffset!.dx) / _displayedImageSize!.width,
-        (_currentRect!.top - _imageOffset!.dy) / _displayedImageSize!.height,
-        (_currentRect!.right - _imageOffset!.dx) / _displayedImageSize!.width,
-        (_currentRect!.bottom - _imageOffset!.dy) / _displayedImageSize!.height,
+        relativeLeft,
+        relativeTop,
+        relativeRight,
+        relativeBottom,
       );
+      
+      // Calculate absolute pixels in actual image for verification
+      final absoluteLeft = (relativeLeft * _imageSize!.width).floor();
+      final absoluteTop = (relativeTop * _imageSize!.height).floor();
+      final absoluteRight = (relativeRight * _imageSize!.width).ceil();
+      final absoluteBottom = (relativeBottom * _imageSize!.height).ceil();
+      
+      debugPrint('ViewerScreen: Absolute pixels: $absoluteLeft, $absoluteTop, $absoluteRight, $absoluteBottom (${absoluteRight - absoluteLeft}x${absoluteBottom - absoluteTop})');
+      debugPrint('ViewerScreen: =====================================');
 
-      if (imageRect.left >= 0 && imageRect.top >= 0 && 
-          imageRect.right <= 1 && imageRect.bottom <= 1) {
-        final newTranslation = Translation(
-          left: imageRect.left,
-          top: imageRect.top,
-          right: imageRect.right,
-          bottom: imageRect.bottom,
-          text: '',
-        );
-        setState(() {
-          _translations.add(newTranslation);
-          _selectedBoxIndex = _translations.length - 1;
+      final newTranslation = Translation(
+        left: imageRect.left,
+        top: imageRect.top,
+        right: imageRect.right,
+        bottom: imageRect.bottom,
+        text: '',
+      );
+      setState(() {
+        _translations.add(newTranslation);
+        _selectedBoxIndex = _translations.length - 1;
+      });
+      
+      // Auto trigger OCR for new box ONLY if widget is still mounted
+      // Use post frame callback to ensure state is updated first
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _selectedBoxIndex != null) {
+            _performOcrForBox(_selectedBoxIndex!);
+          }
         });
       }
     }
@@ -1840,8 +2035,8 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
   void _onDoubleTapDown(TapDownDetails details) {
     if (!_isEditMode || !_isPointInImage(details.localPosition)) return;
 
-    final imagePosition = _globalToImageCoordinates(details.localPosition);
-    final tappedIndex = _getTappedBoxIndex(imagePosition);
+    // Pass screen coordinates directly
+    final tappedIndex = _getTappedBoxIndex(details.localPosition);
     if (tappedIndex != null) {
       _editBoxText(tappedIndex);
     }
@@ -1858,8 +2053,8 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
       return;
     }
 
-    final imagePosition = _globalToImageCoordinates(details.localPosition);
-    final hoveredIndex = _getTappedBoxIndex(imagePosition);
+    // Pass screen coordinates directly
+    final hoveredIndex = _getTappedBoxIndex(details.localPosition);
     
     if (hoveredIndex != _hoveredBoxIndex) {
       setState(() {
@@ -2010,6 +2205,133 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
         _translations.removeAt(_selectedBoxIndex!);
         _selectedBoxIndex = null;
       });
+    }
+  }
+
+  /// Perform OCR for a specific box
+  Future<void> _performOcrForBox(int boxIndex) async {
+    // Early exit if widget is disposed or conditions not met
+    if (!mounted || _ocrService == null || _imageSize == null || _isProcessingOcr) {
+      return;
+    }
+
+    if (boxIndex < 0 || boxIndex >= _translations.length) {
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isProcessingOcr = true;
+    });
+
+    try {
+      final translation = _translations[boxIndex];
+      final boxRect = Rect.fromLTRB(
+        translation.left,
+        translation.top,
+        translation.right,
+        translation.bottom,
+      );
+
+      // Show loading indicator
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(
+              children: [
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                SizedBox(width: 16),
+                Text('Processing OCR...'),
+              ],
+            ),
+            duration: Duration(seconds: 30),
+          ),
+        );
+      }
+
+      // Perform OCR - try Chinese model first for better vertical text support
+      String? recognizedText = await _ocrService!.recognizeText(
+        _currentImageFile,
+        boxRect,
+        _imageSize!,
+        useChinese: true,  // Use Chinese model for better vertical text detection
+      );
+      
+      if (!mounted) return; // Check again after async operation
+      
+      if (recognizedText == null || recognizedText.isEmpty) {
+        recognizedText = await _ocrService!.recognizeText(
+          _currentImageFile,
+          boxRect,
+          _imageSize!,
+          useChinese: false,  // Fallback to Japanese model
+        );
+      }
+
+      if (!mounted) return; // Check again after async operation
+
+      if (recognizedText != null && recognizedText.isNotEmpty) {
+        // Update translation text
+        final textToUse = recognizedText!; // Non-null assertion since we checked above
+        setState(() {
+          _translations[boxIndex] = Translation(
+            left: translation.left,
+            top: translation.top,
+            right: translation.right,
+            bottom: translation.bottom,
+            text: textToUse,
+          );
+        });
+
+        // Copy to clipboard
+        await Clipboard.setData(ClipboardData(text: textToUse));
+
+        // Show success message
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Text recognized and copied to clipboard!'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        // No text detected
+        if (mounted) {
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No text detected in selected area'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('OCR error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('OCR failed: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessingOcr = false;
+        });
+      }
     }
   }
 
@@ -2291,13 +2613,18 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
   }
 
   Rect _getAbsoluteRect(Translation t) {
-    if (_displayedImageSize == null) return Rect.zero;
+    // Use ACTUAL offset/size for consistency with RectanglePainter
+    final effectiveOffset = _actualImageOffset ?? _imageOffset;
+    final effectiveSize = _actualImageSize ?? _displayedImageSize;
     
+    if (effectiveOffset == null || effectiveSize == null) return Rect.zero;
+    
+    // Convert relative coordinates (0-1) to absolute screen coordinates
     return Rect.fromLTRB(
-      t.left * _displayedImageSize!.width,
-      t.top * _displayedImageSize!.height,
-      t.right * _displayedImageSize!.width,
-      t.bottom * _displayedImageSize!.height,
+      effectiveOffset.dx + (t.left * effectiveSize.width),
+      effectiveOffset.dy + (t.top * effectiveSize.height),
+      effectiveOffset.dx + (t.right * effectiveSize.width),
+      effectiveOffset.dy + (t.bottom * effectiveSize.height),
     );
   }
 
@@ -2311,19 +2638,24 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
   }
 
   void _resizeSelectedBox(Offset newPosition) {
-    if (_selectedBoxIndex == null || _resizeHandle == null || 
-        _displayedImageSize == null || _imageOffset == null) return;
+    if (_selectedBoxIndex == null || _resizeHandle == null) return;
+
+    // Use ACTUAL offset/size for consistency
+    final effectiveOffset = _actualImageOffset ?? _imageOffset;
+    final effectiveSize = _actualImageSize ?? _displayedImageSize;
+    
+    if (effectiveOffset == null || effectiveSize == null) return;
 
     final translation = _translations[_selectedBoxIndex!];
     
     final oldImagePos = Offset(
-      (_dragStart!.dx - _imageOffset!.dx) / _displayedImageSize!.width,
-      (_dragStart!.dy - _imageOffset!.dy) / _displayedImageSize!.height,
+      (_dragStart!.dx - effectiveOffset.dx) / effectiveSize.width,
+      (_dragStart!.dy - effectiveOffset.dy) / effectiveSize.height,
     );
     
     final newImagePos = Offset(
-      (newPosition.dx - _imageOffset!.dx) / _displayedImageSize!.width,
-      (newPosition.dy - _imageOffset!.dy) / _displayedImageSize!.height,
+      (newPosition.dx - effectiveOffset.dx) / effectiveSize.width,
+      (newPosition.dy - effectiveOffset.dy) / effectiveSize.height,
     );
     
     final dx = newImagePos.dx - oldImagePos.dx;
@@ -2363,13 +2695,18 @@ class _ViewerScreenState extends State<ViewerScreen> with TickerProviderStateMix
   }
 
   void _dragSelectedBox(Offset newPosition) {
-    if (_selectedBoxIndex == null || _displayedImageSize == null || 
-        _imageOffset == null) return;
+    if (_selectedBoxIndex == null) return;
+
+    // Use ACTUAL offset/size for consistency
+    final effectiveOffset = _actualImageOffset ?? _imageOffset;
+    final effectiveSize = _actualImageSize ?? _displayedImageSize;
+    
+    if (effectiveOffset == null || effectiveSize == null) return;
 
     final translation = _translations[_selectedBoxIndex!];
     
-    final dx = (newPosition.dx - _dragStart!.dx) / _displayedImageSize!.width;
-    final dy = (newPosition.dy - _dragStart!.dy) / _displayedImageSize!.height;
+    final dx = (newPosition.dx - _dragStart!.dx) / effectiveSize.width;
+    final dy = (newPosition.dy - _dragStart!.dy) / effectiveSize.height;
 
     final width = translation.right - translation.left;
     final height = translation.bottom - translation.top;
